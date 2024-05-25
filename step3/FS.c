@@ -66,6 +66,22 @@ int legal_name(char* name, int FC_socket) {
     return 1;
 }
 
+int is_descendant(int16_t ancestor, int16_t descendant) {
+    int16_t parent_id = inode_list[descendant].parent;
+    while (parent_id >= 0) {
+        if (parent_id == ancestor) return 1;
+        parent_id = inode_list[parent_id].parent;
+    }
+    return 0;
+}
+
+int check_permission(int16_t dir_inode_id) {
+    int16_t public_inode_id = search_in_dir(&inode_list[0], "public", 1);
+    if (dir_inode_id == public_inode_id || is_descendant(public_inode_id, dir_inode_id)) return 1;
+    if (dir_inode_id == crt_dir_inode_id || is_descendant(crt_dir_inode_id, dir_inode_id)) return 1;
+    return 0;
+}
+
 int f_handler(char* args, int FC_socket) {
     init_superblock();
     init_inodes();
@@ -176,9 +192,13 @@ int cd_handler(char* args, int FC_socket) {
         }
         dir = strtok(NULL, "/");
     }
+    if (check_permission(new_dir_inode_id) == 0) {
+        write(FC_socket, "Permission denied\n", 19);
+        return 0;
+    }
     crt_dir_inode_id = new_dir_inode_id;
     strcpy(crt_path, new_path);
-    write(FC_socket, "Change directory successfully\n", 31);
+    write(FC_socket, "\0", 1);
     return 0;
 }
 
@@ -188,7 +208,7 @@ int rmdir_handler(char* args, int FC_socket) {
         return 0;
     }
     if (!legal_name(args, FC_socket)) return 0;
-    if (remove_from_dir(&inode_list[crt_dir_inode_id], args, 1) == 0) {
+    if (remove_dir_recursively_from_dir(&inode_list[crt_dir_inode_id], args) == 0) {
         sprintf(WRITE_BUFFER, "Remove directory \"%s\" successfully\n", args);
         write(FC_socket, WRITE_BUFFER, strlen(WRITE_BUFFER));
     }
@@ -459,7 +479,7 @@ int su_handler(char* args, int FC_socket) {
         return 0;
     }
     int16_t home_dir_id = search_in_dir(&inode_list[0], "home", 1);
-    crt_dir_inode_id = search_in_dir(&inode_list[home_dir_id], username, 1);
+    crt_usr_inode_id = crt_dir_inode_id = search_in_dir(&inode_list[home_dir_id], username, 1);
     strcpy(crt_path, "/home/");
     strcat(crt_path, username);
     sprintf(WRITE_BUFFER, "Switch to user \033[1m\033[34m%s\033[0m successfully\n", username);
