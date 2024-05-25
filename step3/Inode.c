@@ -69,6 +69,13 @@ void init_inodes() {
         inode_list[i].id = i;
         store_inode(&inode_list[i]);
     }
+    init_basic_directories();
+}
+
+void init_basic_directories() {
+    add_to_dir(&inode_list[0], "home", 1);
+    add_to_dir(&inode_list[0], "usr", 1);
+    add_to_dir(&inode_list[0], "public", 1);
 }
 
 void load_inodes() {
@@ -232,7 +239,7 @@ int add_to_dir(Inode *dir_inode, char *name, uint16_t mode) {
                 time(&dir_inode->update_time);
                 dir_inode->file_size += ITEM_SIZE;
                 store_inode(dir_inode);
-                return 0;
+                return id;
             }
         }
     }
@@ -273,6 +280,48 @@ int remove_from_dir(Inode *dir_inode, char *name, uint16_t mode) {
         printf("No such directory.\n");
     }
     return -1;
+}
+
+int remove_dir_recursively(Inode *dir_inode) {
+    if (dir_inode->mode != 1) {
+        printf("Not a directory.\n");
+        return -1;
+    }
+    for (int i = 0; i < DIRECT_PTR_CNT; ++i) {
+        if (dir_inode->direct[i] == -1) continue;
+        Item items[ITEM_PER_BLOCK];
+        read_block(dir_inode->direct[i], (char *)items);
+        for (int j = 0; j < ITEM_PER_BLOCK; ++j) {
+            if (items[j].inode_id == -1) continue;
+            if (inode_list[items[j].inode_id].mode == 1) {
+                remove_dir_recursively(&inode_list[items[j].inode_id]);
+                remove_from_dir(dir_inode, items[j].name, 1);
+            } else {
+                remove_from_dir(dir_inode, items[j].name, 0);
+            }
+        }
+        free_block(dir_inode->direct[i]);
+        dir_inode->direct[i] = -1;
+        dir_inode->block_cnt--;
+        time(&dir_inode->update_time);
+        store_inode(dir_inode);
+    }
+    return 0;
+}
+
+int remove_dir_recursively_from_dir(Inode *dir_inode, char *name) {
+    if (dir_inode->mode != 1) {
+        printf("Not a directory.\n");
+        return -1;
+    }
+    int inode_id = search_in_dir(dir_inode, name, 1);
+    if (inode_id < 0) {
+        printf("No such directory.\n");
+        return -1;
+    }
+    Inode *inode = &inode_list[inode_id];
+    remove_dir_recursively(inode);
+    return remove_from_dir(dir_inode, name, 1);
 }
 
 int list_dir(Inode *dir_inode, char *message) {

@@ -43,6 +43,8 @@ void init_inode(Inode *inode, int16_t id, uint16_t mode, int16_t parent);
 
 void init_inodes();
 
+void init_basic_directories();
+
 void load_inodes();
 
 int16_t alloc_inode();
@@ -68,6 +70,10 @@ int16_t search_in_dir(Inode *dir_inode, char *name, uint16_t mode);
 int add_to_dir(Inode *dir_inode, char *name, uint16_t mode);
 
 int remove_from_dir(Inode *dir_inode, char *name, uint16_t mode);
+
+int remove_dir_recursively(Inode *dir_inode);
+
+int remove_dir_recursively_from_dir(Inode *dir_inode, char *name);
 
 int list_dir(Inode *dir_inode, char *message);
 

@@ -7,13 +7,39 @@
 #include "include/Inode.h"
 
 #define MAX_PATH_LEN 256
-int crt_dir_inode_id;
+int16_t crt_dir_inode_id;
 char crt_path[MAX_PATH_LEN];
 int format_flag;
+int crt_usr_inode_id;
 char READ_BUFFER[MAX_BUFFER_SIZE];
 char WRITE_BUFFER[MAX_BUFFER_SIZE];
 
 extern Inode inode_list[MAX_INODE_CNT];
+
+int legal_username(char* name, int FC_socket) {
+    int len = 0;
+    int i = 0;
+    while (name[i] == ' ') ++i;
+    while (name[i] != '\0' && name[i] != ' ') {
+        if (is_letter(name[i]) || is_digits(name[i])) {
+            ++len;
+            ++i;
+        } else {
+            write(FC_socket, "Illegal name: only letters and digits are legal\n", 49);
+            return 0;
+        }
+    }
+    while (name[i] != '\0' && name[i] == ' ') ++i;
+    if (name[i] != '\0') {
+        write(FC_socket, "Illegal name: no space is allowed in the name\n", 47);
+        return 0;
+    }
+    if (len > MAX_ITEM_NAME_LEN) {
+        write(FC_socket, "Illegal name: the length of the name is at most 30 characters\n", 63);
+        return 0;
+    }
+    return 1;
+}
 
 int legal_name(char* name, int FC_socket) {
     int len = 0;
@@ -43,9 +69,9 @@ int legal_name(char* name, int FC_socket) {
 int f_handler(char* args, int FC_socket) {
     init_superblock();
     init_inodes();
-    crt_dir_inode_id = 0;
+    crt_usr_inode_id = crt_dir_inode_id = search_in_dir(&inode_list[0], "public", 1);
     memset(crt_path, 0, sizeof(crt_path));
-    strcpy(crt_path, "/");
+    strcpy(crt_path, "/public");
     format_flag = 1;
     write(FC_socket, "Format the file system successfully\n", 37);
     return 0;
@@ -64,7 +90,7 @@ int mk_handler(char* args, int FC_socket) {
         write(FC_socket, WRITE_BUFFER, strlen(WRITE_BUFFER));
         return 0;
     }
-    if (add_to_dir(&inode_list[crt_dir_inode_id], args, 0) == 0) {
+    if (add_to_dir(&inode_list[crt_dir_inode_id], args, 0) >= 0) {
         sprintf(WRITE_BUFFER, "Create file \"%s\" successfully\n", args);
         write(FC_socket, WRITE_BUFFER, strlen(WRITE_BUFFER));
     }
@@ -84,7 +110,7 @@ int mkdir_handler(char* args, int FC_socket) {
         write(FC_socket, WRITE_BUFFER, strlen(WRITE_BUFFER));
         return 0;
     }
-    if (add_to_dir(&inode_list[crt_dir_inode_id], args, 1) == 0) {
+    if (add_to_dir(&inode_list[crt_dir_inode_id], args, 1) >= 0) {
         sprintf(WRITE_BUFFER, "Create directory \"%s\" successfully\n", args);
         write(FC_socket, WRITE_BUFFER, strlen(WRITE_BUFFER));
     }
@@ -178,7 +204,7 @@ int ls_handler(char* args, int FC_socket) {
     memset(WRITE_BUFFER, 0, MAX_BUFFER_SIZE);
     list_dir(&inode_list[crt_dir_inode_id], WRITE_BUFFER);
     if (strlen(WRITE_BUFFER) == 0) {
-        write(FC_socket, "Current directory is empty\n", 28);
+        write(FC_socket, "\0", 1);
         return 0;
     }
     write(FC_socket, WRITE_BUFFER, strlen(WRITE_BUFFER));
@@ -330,6 +356,117 @@ int e_handler(char* args, int FC_socket) {
     return -1;
 }
 
+int useradd_handler(char* args, int FC_socket) {
+    if (!format_flag) {
+        write(FC_socket, "Please format the file system first\n", 37);
+        return 0;
+    }
+    char username[MAX_ITEM_NAME_LEN];
+    char password[MAX_PASSWORD_LEN];
+    memset(username, 0, MAX_ITEM_NAME_LEN);
+    memset(password, 0, MAX_PASSWORD_LEN);
+    sscanf(args, "%s %[^\n]", username, password);
+    if (!legal_username(username, FC_socket) || !legal_name(password, FC_socket)) return 0;
+    if (password[0] == '\0') {
+        write(FC_socket, "Password cannot be empty\n", 26);
+        return 0;
+    }
+    if (password[MAX_PASSWORD_LEN - 1] != '\0') {
+        write(FC_socket, "Password is at most 10 characters (letters, digits, _ and .)\n", 62);
+        return 0;
+    }
+    int16_t usr_dir_id = search_in_dir(&inode_list[0], "usr", 1);
+    if (search_in_dir(&inode_list[usr_dir_id], username, 0) >= 0) {
+        write(FC_socket, "User already exists\n", 21);
+        return 0;
+    }
+    int16_t usr_file_id = add_to_dir(&inode_list[usr_dir_id], username, 0);
+    write_file(&inode_list[usr_file_id], password, MAX_PASSWORD_LEN);
+    int16_t home_dir_id = search_in_dir(&inode_list[0], "home", 1);
+    add_to_dir(&inode_list[home_dir_id], username, 1);
+    sprintf(WRITE_BUFFER, "Add user \033[1m\033[34m%s\033[0m successfully\n", username);
+    write(FC_socket, WRITE_BUFFER, strlen(WRITE_BUFFER));
+    return 0;
+}
+
+int userdel_handler(char* args, int FC_socket) {
+    if (!format_flag) {
+        write(FC_socket, "Please format the file system first\n", 37);
+        return 0;
+    }
+    char username[MAX_ITEM_NAME_LEN];
+    char password[MAX_PASSWORD_LEN];
+    memset(username, 0, MAX_ITEM_NAME_LEN);
+    memset(password, 0, MAX_PASSWORD_LEN);
+    sscanf(args, "%s %[^\n]", username, password);
+    if (!legal_username(username, FC_socket) || !legal_name(password, FC_socket)) return 0;
+    if (password[0] == '\0') {
+        write(FC_socket, "Password cannot be empty\n", 26);
+        return 0;
+    }
+    if (password[MAX_PASSWORD_LEN - 1] != '\0') {
+        write(FC_socket, "Password is at most 10 characters (letters, digits, _ and .)\n", 62);
+        return 0;
+    }
+    int16_t usr_dir_id = search_in_dir(&inode_list[0], "usr", 1);
+    int16_t usr_file_id = search_in_dir(&inode_list[usr_dir_id], username, 0);
+    if (usr_file_id == -1) {
+        write(FC_socket, "User doesn't exit\n", 19);
+        return 0;
+    }
+    read_file(&inode_list[usr_file_id], READ_BUFFER);
+    if (strncmp(READ_BUFFER, password, MAX_PASSWORD_LEN) != 0) {
+        write(FC_socket, "Password incorrect\n", 20);
+        return 0;
+    }
+    remove_from_dir(&inode_list[usr_dir_id], username, 0);
+    int16_t home_dir_id = search_in_dir(&inode_list[0], "home", 1);
+    if (remove_dir_recursively_from_dir(&inode_list[home_dir_id], username) == 0) {
+        sprintf(WRITE_BUFFER, "Delete user \033[1m\033[34m%s\033[0m successfully\n", username);
+        write(FC_socket, WRITE_BUFFER, strlen(WRITE_BUFFER));
+    };
+    return 0;
+}
+
+int su_handler(char* args, int FC_socket) {
+    if (!format_flag) {
+        write(FC_socket, "Please format the file system first\n", 37);
+        return 0;
+    }
+    char username[MAX_ITEM_NAME_LEN];
+    char password[MAX_PASSWORD_LEN];
+    memset(username, 0, MAX_ITEM_NAME_LEN);
+    memset(password, 0, MAX_PASSWORD_LEN);
+    sscanf(args, "%s %[^\n]", username, password);
+    if (!legal_username(username, FC_socket) || !legal_name(password, FC_socket)) return 0;
+    if (password[0] == '\0') {
+        write(FC_socket, "Password cannot be empty\n", 26);
+        return 0;
+    }
+    if (password[MAX_PASSWORD_LEN - 1] != '\0') {
+        write(FC_socket, "Password is at most 10 characters (letters, digits, _ and .)\n", 62);
+        return 0;
+    }
+    int16_t usr_dir_id = search_in_dir(&inode_list[0], "usr", 1);
+    int16_t usr_file_id = search_in_dir(&inode_list[usr_dir_id], username, 0);
+    if (usr_file_id == -1) {
+        write(FC_socket, "User doesn't exit\n", 19);
+        return 0;
+    }
+    read_file(&inode_list[usr_file_id], READ_BUFFER);
+    if (strncmp(READ_BUFFER, password, MAX_PASSWORD_LEN) != 0) {
+        write(FC_socket, "Password incorrect\n", 20);
+        return 0;
+    }
+    int16_t home_dir_id = search_in_dir(&inode_list[0], "home", 1);
+    crt_dir_inode_id = search_in_dir(&inode_list[home_dir_id], username, 1);
+    strcpy(crt_path, "/home/");
+    strcat(crt_path, username);
+    sprintf(WRITE_BUFFER, "Switch to user \033[1m\033[34m%s\033[0m successfully\n", username);
+    write(FC_socket, WRITE_BUFFER, strlen(WRITE_BUFFER));
+    return 0;
+}
+
 typedef struct command {
     const char* cmd_name;
     int (*cmd_handler)(char* args, int FC_socket);
@@ -348,13 +485,15 @@ Command cmd_list[] = {
     {"i", i_handler},
     {"d", d_handler},
     {"e", e_handler},
-};
+    {"useradd", useradd_handler},
+    {"userdel", userdel_handler},
+    {"su", su_handler}};
 
 const int cmd_list_len = sizeof(cmd_list) / sizeof(Command);
 
 void serve_FC(int FC_socket) {
     char args[MAX_BUFFER_SIZE];
-    char cmd_name[6];
+    char cmd_name[10];
     int cmd_ret;
     int cmd_miss;
 
@@ -363,8 +502,8 @@ void serve_FC(int FC_socket) {
 
     if (load_superblock() == 0) {
         load_inodes();
-        crt_dir_inode_id = 0;
-        strcpy(crt_path, "/");
+        crt_usr_inode_id = crt_dir_inode_id = search_in_dir(&inode_list[0], "public", 1);
+        strcpy(crt_path, "/public");
         format_flag = 1;
     }
     while (1) {
