@@ -3,10 +3,15 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <semaphore.h>
+#include <fcntl.h>
+
 #include "include/BDC.h"
 #include "include/Inode.h"
 
 #define MAX_PATH_LEN 256
+#define SEM_NAME "/mysem"
+
 int16_t crt_dir_inode_id;
 char crt_path[MAX_PATH_LEN];
 int format_flag;
@@ -511,7 +516,7 @@ Command cmd_list[] = {
 
 const int cmd_list_len = sizeof(cmd_list) / sizeof(Command);
 
-void serve_FC(int FC_socket) {
+void serve_FC(int FC_socket, sem_t *sem) {
     char args[MAX_BUFFER_SIZE];
     char cmd_name[10];
     int cmd_ret;
@@ -536,7 +541,11 @@ void serve_FC(int FC_socket) {
         cmd_miss = 1;
         for (int i = 0; i < cmd_list_len; ++i) {
             if (strcmp(cmd_name, cmd_list[i].cmd_name) == 0) {
+                sem_wait(sem);
+                load_superblock();
+                load_inodes();
                 cmd_ret = cmd_list[i].cmd_handler(args, FC_socket);
+                sem_post(sem);
                 cmd_miss = 0;
                 break;
             }
@@ -563,6 +572,12 @@ int main(int argc, char* argv[]) {
     }
     connect_to_BDS(argv);
 
+    sem_t *sem = sem_open(SEM_NAME, O_CREAT, 0644, 1);
+    if (sem == SEM_FAILED) {
+        perror("sem_open");
+        exit(EXIT_FAILURE);
+    }
+
     int FSPort = atoi(argv[3]);
     int FS_sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (FS_sockfd < 0) {
@@ -583,11 +598,12 @@ int main(int argc, char* argv[]) {
         FC_socket = accept(FS_sockfd, (struct sockaddr*)&client_addr, &addr_len);
         printf("Connection from %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
         if (fork() == 0) {
-            serve_FC(FC_socket);
+            serve_FC(FC_socket, sem);
             close(FC_socket);
+            sem_close(sem);
+            sem_unlink(SEM_NAME);
             exit(0);
         }
         close(FC_socket);
-        wait(NULL);
     }
 }
